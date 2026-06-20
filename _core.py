@@ -145,10 +145,12 @@ class RRNG:
 
     def _sample_index_rejection(self, n, size):
         bits = (n - 1).bit_length()              # ceil(log2 n)
-        if bits > 16:
-            # rbits draws ceil((bits+1)/16) uniforms per index; the vectorized fast
-            # path below assumes a single 16-bit draw (n <= 2^16). Fall back to a
-            # correct scalar loop for larger n (rare for bootstrap resampling).
+        if bits > 15:
+            # R's rbits(bits) loops `for (n = 0; n <= bits; n += 16)`, i.e. it draws
+            # (bits // 16 + 1) 16-bit uniforms per index -- so 2 draws already at
+            # bits == 16. The vectorized fast path below assumes a SINGLE 16-bit draw,
+            # valid only for bits <= 15 (n <= 32768). Fall back to a correct scalar
+            # loop otherwise (rare for bootstrap resampling).
             return self._sample_index_rejection_scalar(n, size, bits)
         mask = (1 << bits) - 1
         out = np.empty(size, dtype=np.int64)

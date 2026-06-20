@@ -38,8 +38,23 @@ def _check_case(c):
         exp = np.asarray(c["expected"], dtype=np.int64)
         assert np.array_equal(got, exp), (
             f"sample[{c['sample_kind']}] seed={c['seed']} n={c['n']}: "
-            f"got {got.tolist()} != {exp.tolist()}")
-        return f"sample[{c['sample_kind']:<9}] seed={c['seed']:<7} n={c['n']:<5} EXACT"
+            f"got {got[:12].tolist()}... != {exp[:12].tolist()}...")
+        return f"sample[{c['sample_kind']:<9}] seed={c['seed']:<7} n={c['n']:<7} size={c['size']:<6} EXACT"
+    elif c["type"] == "stream":
+        # ONE seed stream, interleaved runif/sample consumed in order (the key feature).
+        g = RRNG(c["seed"], sample_kind=c["sample_kind"])
+        for k, op in enumerate(c["ops"]):
+            exp = op["expected"]
+            if op["op"] == "runif":
+                got = g.runif(op["n"])
+                err = float(np.max(np.abs(got - np.asarray(exp, dtype=float))))
+                assert err <= RUNIF_TOL, f"stream seed={c['seed']} op{k} runif max|err|={err:.2e}"
+            else:  # sample
+                got = g.sample_index(op["n"], op["size"])
+                assert np.array_equal(got, np.asarray(exp, dtype=np.int64)), (
+                    f"stream seed={c['seed']} op{k} sample(n={op['n']}): "
+                    f"got {got.tolist()} != {exp}")
+        return f"stream seed={c['seed']:<7} {len(c['ops'])} interleaved ops EXACT"
     raise ValueError(c["type"])
 
 
