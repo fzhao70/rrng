@@ -18,14 +18,24 @@ R chain (src/main/RNG.c):
   sample(n) : R_unif_index(n) via rbits(ceil(log2 n)) with rejection of draws >= n
               (R >= 3.6); or floor(n * unif_rand()) (R < 3.6, 'Rounding').
 """
+import math
+
 import numpy as np
+
+from ._qnorm import qnorm
+from . import _sample
+from . import _dist
+
+BIG = 134217728  # 2^27, R's norm_rand Inversion constant
 
 N, M = 624, 397
 MATRIX_A, UPPER_MASK, LOWER_MASK = 0x9908b0df, 0x80000000, 0x7fffffff
 MASK32 = 0xffffffff
-I2_32M1 = 2.328306437080797e-10          # 1 / (2^32 - 1)
-_LO = 0.5 * I2_32M1
-_HI = 1.0 - 0.5 * I2_32M1
+# R's MT_genrand scales the raw uint32 by 1/2^32 (src/nmath ... RNG.c), NOT 1/(2^32-1).
+MT_SCALE = 2.3283064365386963e-10        # 1 / 2^32  (R's MT_genrand multiplier)
+I2_32M1 = 2.328306437080797e-10          # 1 / (2^32 - 1), used only by R's fixup edges
+_LO = 0.5 * I2_32M1                       # fixup: x <= 0      -> 0.5 / (2^32 - 1)
+_HI = 1.0 - 0.5 * I2_32M1                 # fixup: 1 - x <= 0  -> 1 - 0.5 / (2^32 - 1)
 
 _SAMPLE_KINDS = ("rejection", "rounding")
 
@@ -97,8 +107,8 @@ class RRNG:
     # ---------------- fast uniform buffer via NumPy MT19937 (R state) -----------
     def _refill(self, n):
         raw = self._bg.random_raw(int(n)).astype(np.float64)
-        u = raw * I2_32M1
-        np.clip(u, _LO, _HI, out=u)              # R fixup: raw in [0, 2^32-1] -> u in (0,1)
+        u = raw * MT_SCALE                       # R's MT_genrand: raw / 2^32 -> [0, 1)
+        np.clip(u, _LO, _HI, out=u)              # R fixup of the 0 / 1 edges
         self._buf = u
         self._pos = 0
 
@@ -123,6 +133,28 @@ class RRNG:
             self._pos += take
             filled += take
         return out
+
+    # ---------------------- normal: R's default Inversion rnorm -----------------
+    def norm_rand(self):
+        """One R ``rnorm(1)`` draw (standard normal), normal.kind = "Inversion".
+
+        Consumes exactly TWO unif_rand() draws (R combines them for 53-bit precision).
+        """
+        u1 = self.unif_rand()
+        u1 = float(int(BIG * u1)) + self.unif_rand()   # (int) truncates toward 0; u1>0
+        return float(qnorm(u1 / BIG))
+
+    def rnorm(self, n, mean=0.0, sd=1.0):
+        """A length-``n`` R ``rnorm(n, mean, sd)`` block (Inversion), as float64 array.
+
+        Matches R's consumption order: 2 unif draws per value, interleaved
+        (u1_0, u2_0, u1_1, u2_1, ...).
+        """
+        n = int(n)
+        block = self.runif(2 * n)
+        u1 = np.floor(BIG * block[0::2]) + block[1::2]   # (int) cast == floor for u>0
+        p = u1 / BIG
+        return mean + sd * qnorm(p)
 
     # -------- R sample(seq_len(n), size, replace=TRUE) -> 0-based indices --------
     def sample_index(self, n, size):
@@ -189,3 +221,67 @@ class RRNG:
                     out[i] = v
                     break
         return out
+
+    # ---- scalar R_unif_index(dn): one index in [0, dn), R's exact rbits rejection ----
+    def _rbits(self, bits):
+        """R's rbits(bits): draw (bits//16 + 1) 16-bit uniforms, keep low `bits` bits."""
+        v = 0
+        for _ in range(bits // 16 + 1):
+            v = 65536 * v + int(math.floor(self.unif_rand() * 65536.0))
+        return v & ((1 << bits) - 1)
+
+    def _unif_index(self, dn):
+        """R's R_unif_index(dn) -> integer in [0, dn). Honours sample_kind."""
+        if dn <= 0:
+            return 0
+        if self.sample_kind == "rounding":
+            return int(math.floor(dn * self.unif_rand()))
+        bits = (int(dn) - 1).bit_length()         # ceil(log2 dn)
+        while True:
+            dv = self._rbits(bits)
+            if dv < dn:
+                return dv
+
+    # ----------------- non-uniform variates (R nmath, bit-for-bit) ---------------
+    def rexp(self, n, rate=1.0):
+        """R's ``rexp(n, rate)`` -> float64 array (scale = 1/rate)."""
+        scale = 1.0 / rate
+        return np.array([_dist.rexp(self, scale) for _ in range(int(n))], dtype=np.float64)
+
+    def rpois(self, n, mu):
+        """R's ``rpois(n, mu)`` (scalar mu) -> int64 array of counts."""
+        mu = float(mu)
+        return np.array([_dist.rpois(self, mu) for _ in range(int(n))], dtype=np.int64)
+
+    def rbinom(self, n, size, prob):
+        """R's ``rbinom(n, size, prob)`` (scalar size, prob) -> int64 array of counts."""
+        size = float(size)
+        prob = float(prob)
+        return np.array([_dist.rbinom(self, size, prob) for _ in range(int(n))], dtype=np.int64)
+
+    def rgamma(self, n, shape, rate=1.0, scale=None):
+        """R's ``rgamma(n, shape, rate=1, scale=1/rate)`` -> float64 array."""
+        if scale is None:
+            scale = 1.0 / rate
+        shape = float(shape)
+        scale = float(scale)
+        return np.array([_dist.rgamma(self, shape, scale) for _ in range(int(n))], dtype=np.float64)
+
+    # --------------------------- general R sample.int -----------------------------
+    def sample(self, n, size=None, replace=False, prob=None):
+        """R's ``sample.int(n, size, replace, prob)`` -> 0-based indices (int64 array).
+
+        Matches R >= 3.6. Covers equal-prob (with/without replacement) and weighted
+        ``prob=`` (with/without replacement, including R's Walker alias path). Defaults
+        mirror R: ``size = n``, ``replace = False``, ``prob = None``.
+
+        Note: R switches to a hashing algorithm only for ``n > 1e7`` non-replace
+        unweighted draws (``sample.int(useHash=)``); that path is not replicated.
+        """
+        n = int(n)
+        size = n if size is None else int(size)
+        if prob is None:
+            if replace:
+                return self.sample_index(n, size)           # validated vectorized path
+            return _sample.sample_noreplace(self, n, size)
+        return _sample.sample_prob(self, n, size, replace, np.asarray(prob, dtype=np.float64))

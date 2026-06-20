@@ -16,7 +16,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from rrng import RRNG
 
 FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "golden_vectors.json")
-RUNIF_TOL = 1e-9   # R prints/stores doubles; rrng floats match to full double precision
+RUNIF_TOL = 1e-9   # legacy runif fixtures stored at 17 sig digits
+# Continuous variates (rnorm/rexp/rgamma) are bit-exact here; allow a hair for any
+# last-ULP libm difference across machines in exp/log-heavy paths.
+FLOAT_TOL = 1e-12
+
+
+def _close(got, exp, tol):
+    got = np.asarray(got, dtype=float)
+    exp = np.asarray(exp, dtype=float)
+    denom = np.maximum(np.abs(exp), 1.0)
+    return float(np.max(np.abs(got - exp) / denom))
 
 
 def _load():
@@ -55,6 +65,41 @@ def _check_case(c):
                     f"stream seed={c['seed']} op{k} sample(n={op['n']}): "
                     f"got {got.tolist()} != {exp}")
         return f"stream seed={c['seed']:<7} {len(c['ops'])} interleaved ops EXACT"
+    elif c["type"] == "rnorm":
+        got = RRNG(c["seed"]).rnorm(c["n"])
+        err = _close(got, c["expected"], FLOAT_TOL)
+        assert err <= FLOAT_TOL, f"rnorm seed={c['seed']} relerr={err:.2e}"
+        return f"rnorm  seed={c['seed']:<7} n={c['n']:<3} relerr={err:.1e}"
+    elif c["type"] == "rexp":
+        got = RRNG(c["seed"]).rexp(c["n"], rate=c["rate"])
+        err = _close(got, c["expected"], FLOAT_TOL)
+        assert err <= FLOAT_TOL, f"rexp seed={c['seed']} rate={c['rate']} relerr={err:.2e}"
+        return f"rexp   seed={c['seed']:<7} rate={c['rate']:<4} relerr={err:.1e}"
+    elif c["type"] == "rgamma":
+        got = RRNG(c["seed"]).rgamma(c["n"], c["shape"], scale=c["scale"])
+        err = _close(got, c["expected"], FLOAT_TOL)
+        assert err <= FLOAT_TOL, f"rgamma seed={c['seed']} shape={c['shape']} relerr={err:.2e}"
+        return f"rgamma seed={c['seed']:<7} shape={c['shape']:<5} scale={c['scale']:<3} relerr={err:.1e}"
+    elif c["type"] == "rpois":
+        got = RRNG(c["seed"]).rpois(c["n"], c["mu"])
+        exp = np.asarray(c["expected"], dtype=np.int64)
+        assert np.array_equal(got, exp), f"rpois seed={c['seed']} mu={c['mu']}: {got.tolist()} != {exp.tolist()}"
+        return f"rpois  seed={c['seed']:<7} mu={c['mu']:<5} EXACT"
+    elif c["type"] == "rbinom":
+        got = RRNG(c["seed"]).rbinom(c["n"], c["size"], c["prob"])
+        exp = np.asarray(c["expected"], dtype=np.int64)
+        assert np.array_equal(got, exp), f"rbinom seed={c['seed']} size={c['size']} prob={c['prob']}: {got.tolist()} != {exp.tolist()}"
+        return f"rbinom seed={c['seed']:<7} size={c['size']:<5} prob={c['prob']:<4} EXACT"
+    elif c["type"] == "sample2":
+        prob = None if c["prob"] is None else np.asarray(c["prob"], dtype=float)
+        g = RRNG(c["seed"], sample_kind=c.get("sample_kind", "rejection"))
+        got = g.sample(c["n"], c["size"], replace=c["replace"], prob=prob)
+        exp = np.asarray(c["expected"], dtype=np.int64)
+        kind = "weighted" if prob is not None else "equal"
+        rep = "replace" if c["replace"] else "noreplace"
+        assert np.array_equal(got, exp), (
+            f"sample({kind},{rep}) seed={c['seed']} n={c['n']}: {got.tolist()} != {exp.tolist()}")
+        return f"sample2 seed={c['seed']:<7} n={c['n']:<5} {kind:<8} {rep:<9} EXACT"
     raise ValueError(c["type"])
 
 

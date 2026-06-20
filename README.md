@@ -9,6 +9,12 @@ from rrng import RRNG
 g = RRNG(100)                          # R: set.seed(100)   (sample_kind="rounding" for R < 3.6)
 g.unif_rand()                          # one R runif() draw                  -> 0.3077661
 g.runif(5)                             # an R runif(5) block (numpy array)
+g.rnorm(5)                             # rnorm(5)   (Inversion, R's default)
+g.rexp(5, rate=2); g.rpois(5, mu=3)    # rexp / rpois
+g.rbinom(5, size=20, prob=0.3)         # rbinom
+g.rgamma(5, shape=2.5, scale=2)        # rgamma
+g.sample(10, 5, replace=False)         # sample(1:10, 5)            -> 0-based indices
+g.sample(10, 8, replace=True, prob=w)  # weighted sample(prob=)
 idx = RRNG(100).sample_index(10, 10)   # 0-based sample(1:10, 10, replace=TRUE) -> [9 6 5 2 8 9 6 5 5 3]
 ```
 
@@ -103,19 +109,25 @@ Get all three right and Python matches R exactly.
 
 ## Scope
 
-**Covered (v0, validated bit-for-bit against R):**
-- RNG kind: **Mersenne-Twister** (R's default).
-- `set_seed(s)` — R's exact seeding.
-- `unif_rand()` and `runif(n)`.
-- `sample_index(n, size)` = `sample(seq_len(n), size, replace=TRUE)`, both the **R ≥ 3.6 Rejection**
-  method (`sample_kind="rejection"`, default) and the **R < 3.6 Rounding** method
-  (`sample_kind="rounding"`), returning 0-based indices.
+**Covered (validated bit-for-bit against R 4.5):**
+- RNG kind: **Mersenne-Twister** (R's default), exact `set_seed(s)`.
+- Uniform: `unif_rand()`, `runif(n)`.
+- Normal: `rnorm(n, mean, sd)` — R's default **Inversion** (`qnorm`, Wichura AS 241), 2 draws/value.
+- Exponential: `rexp(n, rate)` — Ahrens-Dieter `exp_rand`.
+- Poisson: `rpois(n, mu)` — Ahrens-Dieter (both the small-`mu` inversion and big-`mu` rejection branches).
+- Binomial: `rbinom(n, size, prob)` — inversion (`np<30`) and **BTPE** (`np≥30`).
+- Gamma: `rgamma(n, shape, rate=, scale=)` — **GD** (shape≥1) and **GS** (shape<1).
+- Sampling: `sample(n, size, replace=, prob=)` and `sample_index(n, size)` — equal-probability
+  with/without replacement, and weighted `prob=` (cumulative, **Walker alias** for >200 heavy
+  cells, and sequential no-replacement). Both the **R ≥ 3.6 Rejection** index method
+  (`sample_kind="rejection"`, default) and the **R < 3.6 Rounding** method (`sample_kind="rounding"`).
+  Returns 0-based indices.
 
-**Non-goals for v0 (documented, added incrementally):**
-- Other RNG kinds (Wichmann-Hill, Marsaglia-Multicarry, Super-Duper, Knuth-TAOCP, L'Ecuyer-CMRG).
-- `rnorm` (R default = **Inversion** → needs a high-precision `qnorm`) and other `normal.kind`s;
-  `rexp`, `rbinom`, `rpois`, `rgamma`, …
-- `sample` without replacement, and weighted `sample(prob=)`.
+**Not (yet) covered:**
+- Other RNG kinds (Wichmann-Hill, Marsaglia-Multicarry, Super-Duper, Knuth-TAOCP, L'Ecuyer-CMRG)
+  and non-default `normal.kind`s (Box-Muller, Kinderman-Ramage).
+- `rbeta`, `rt`, `rchisq`, `rf`, `rcauchy`, `rlogis`, `rweibull`, `rgeom`, `rnbinom`, `rhyper`, …
+- `sample.int(useHash=TRUE)` (only triggers for `n > 1e7` unweighted no-replacement draws).
 
 Honesty about scope is the point: advertise *exactly* what matches R, not "all of R".
 
@@ -129,11 +141,12 @@ Honesty about scope is the point: advertise *exactly* what matches R, not "all o
 
 ## Roadmap
 
-1. v0: MT + `set_seed` + `runif` + `sample_index` (replace=TRUE), both sample kinds. ✅ validated.
-2. `rnorm` via **Inversion** (qnorm) — the most-requested next piece.
-3. `sample` without replacement; weighted `sample(prob=)`.
-4. `rexp`, `rbinom`, `rpois`, `rgamma`.
-5. Optional: alternate RNG kinds / `normal.kind`s behind flags.
+1. MT + `set_seed` + `runif` + `sample_index` (replace=TRUE), both sample kinds. ✅ validated.
+2. `rnorm` via **Inversion** (qnorm). ✅ validated.
+3. `sample` without replacement; weighted `sample(prob=)` (incl. Walker alias). ✅ validated.
+4. `rexp`, `rbinom`, `rpois`, `rgamma`. ✅ validated.
+5. Next: more continuous families (`rbeta`, `rchisq`, `rt`, `rf`, `rweibull`, …) and discrete
+   (`rgeom`, `rnbinom`, `rhyper`); optional alternate RNG kinds / `normal.kind`s behind flags.
 
 ## Positioning
 

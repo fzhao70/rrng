@@ -18,7 +18,9 @@ size  <- 20L
 kinds <- c("Rejection", "Rounding")
 
 num <- function(v) paste(format(v, digits = 17, scientific = FALSE, trim = TRUE), collapse = ", ")
+num17 <- function(v) paste(sprintf("%.17g", v), collapse = ", ")   # round-trip-exact doubles
 int <- function(v) paste(as.integer(v), collapse = ", ")
+dseeds <- c(1L, 42L, 100L)   # seeds for the distribution / general-sample fixtures
 
 cases <- character(0)
 
@@ -74,6 +76,55 @@ for (s in seeds) {
     sep = ", ")
   cases <- c(cases, sprintf(
     '{"type": "stream", "sample_kind": "rejection", "seed": %d, "ops": [%s]}', s, ops))
+}
+
+# --- rnorm (Inversion / qnorm): full double precision ---
+for (s in dseeds) {
+  set.seed(s); v <- rnorm(15)
+  cases <- c(cases, sprintf('{"type": "rnorm", "seed": %d, "n": 15, "expected": [%s]}', s, num17(v)))
+}
+
+# --- rexp (Ahrens-Dieter) ---
+for (s in dseeds) for (rate in c(1, 2.5)) {
+  set.seed(s); v <- rexp(15, rate)
+  cases <- c(cases, sprintf('{"type": "rexp", "seed": %d, "rate": %s, "n": 15, "expected": [%s]}',
+                            s, sprintf("%.17g", rate), num17(v)))
+}
+
+# --- rpois: span the small (<10) / big (>=10) algorithm boundary ---
+for (s in dseeds) for (mu in c(0.5, 3, 9.9, 10, 50)) {
+  set.seed(s); v <- rpois(15, mu)
+  cases <- c(cases, sprintf('{"type": "rpois", "seed": %d, "mu": %s, "n": 15, "expected": [%s]}',
+                            s, sprintf("%.17g", mu), int(v)))
+}
+
+# --- rbinom: inversion (np<30), BTPE (np>=30), and p>0.5 reflection ---
+rb <- list(c(20, 0.3), c(1000, 0.4), c(30, 0.8), c(5, 0.5))
+for (s in dseeds) for (pr in rb) {
+  set.seed(s); v <- rbinom(15, pr[1], pr[2])
+  cases <- c(cases, sprintf('{"type": "rbinom", "seed": %d, "size": %d, "prob": %s, "n": 15, "expected": [%s]}',
+                            s, as.integer(pr[1]), sprintf("%.17g", pr[2]), int(v)))
+}
+
+# --- rgamma: GS (a<1) and GD (a>=1) across the b/si/c sub-branches ---
+for (s in dseeds) for (shape in c(0.3, 0.5, 2.5, 5, 20)) for (scl in c(1, 2)) {
+  set.seed(s); v <- rgamma(15, shape = shape, scale = scl)
+  cases <- c(cases, sprintf('{"type": "rgamma", "seed": %d, "shape": %s, "scale": %s, "n": 15, "expected": [%s]}',
+                            s, sprintf("%.17g", shape), sprintf("%.17g", scl), num17(v)))
+}
+
+# --- general sample(): no-replace equal, weighted (replace / no-replace), Walker ---
+w10 <- 1:10
+w250 <- 1:250
+for (s in dseeds) {
+  set.seed(s); v <- sample(20, 10) - 1                                  # equal, no replacement
+  cases <- c(cases, sprintf('{"type": "sample2", "seed": %d, "n": 20, "size": 10, "replace": false, "prob": null, "expected": [%s]}', s, int(v)))
+  set.seed(s); v <- sample(10, 8, replace = TRUE,  prob = w10) - 1      # weighted, replace
+  cases <- c(cases, sprintf('{"type": "sample2", "seed": %d, "n": 10, "size": 8, "replace": true, "prob": [%s], "expected": [%s]}', s, num17(w10), int(v)))
+  set.seed(s); v <- sample(10, 5, replace = FALSE, prob = w10) - 1      # weighted, no replace
+  cases <- c(cases, sprintf('{"type": "sample2", "seed": %d, "n": 10, "size": 5, "replace": false, "prob": [%s], "expected": [%s]}', s, num17(w10), int(v)))
+  set.seed(s); v <- sample(250, 15, replace = TRUE, prob = w250) - 1    # Walker alias (nc>200)
+  cases <- c(cases, sprintf('{"type": "sample2", "seed": %d, "n": 250, "size": 15, "replace": true, "prob": [%s], "expected": [%s]}', s, num17(w250), int(v)))
 }
 
 # robust output path regardless of cwd: write next to this script's fixtures dir
