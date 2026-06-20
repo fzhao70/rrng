@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rrng"
+version = "0.1.0"
+description = "Reproduce R's native default RNG (set.seed/runif/sample) bit-for-bit in pure Python, no R at runtime"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "fzhao" }]
+keywords = ["R", "RNG", "Mersenne-Twister", "set.seed", "reproducibility", "bootstrap"]
+dependencies = ["numpy>=1.20"]
+
+[project.urls]
+"Provenance" = "https://github.com/wch/r-source/blob/trunk/src/main/RNG.c"
+
+# Flat layout: the package `rrng` lives in this directory (pyproject sits inside it),
+# so it is also importable in place as `from rrng import RRNG` from the parent dir.
+[tool.setuptools]
+packages = ["rrng"]
+package-dir = { "rrng" = "." }
+
+[tool.setuptools.package-data]
+rrng = ["tests/fixtures/*.json", "tests/*.R", "examples/*"]
